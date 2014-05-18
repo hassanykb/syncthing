@@ -2,6 +2,7 @@
 package files
 
 import (
+	"path"
 	"sync"
 
 	"github.com/calmh/syncthing/cid"
@@ -48,6 +49,7 @@ func (m *Set) Replace(id uint, fs []scanner.File) {
 	if len(fs) == 0 || !m.equals(id, fs) {
 		m.changes[id]++
 		m.replace(id, fs)
+		m.check(id)
 	}
 	m.Unlock()
 }
@@ -90,6 +92,7 @@ func (m *Set) ReplaceWithDelete(id uint, fs []scanner.File) {
 		}
 
 		m.replace(id, fs)
+		m.check(id)
 	}
 	m.Unlock()
 }
@@ -101,6 +104,7 @@ func (m *Set) Update(id uint, fs []scanner.File) {
 	m.Lock()
 	m.update(id, fs)
 	m.changes[id]++
+	m.check(id)
 	m.Unlock()
 }
 
@@ -305,4 +309,30 @@ func (m *Set) replace(cid uint, fs []scanner.File) {
 
 	// Add new remote remoteKey to the mix
 	m.update(cid, fs)
+}
+
+func (m *Set) check(cid uint) {
+	var checked = make(map[string]bool)
+	for name := range m.remoteKey[cid] {
+		m.checkFile(cid, name, checked)
+	}
+}
+
+func (m *Set) checkFile(cid uint, name string, checked map[string]bool) bool {
+	if v, ok := checked[name]; ok {
+		return v
+	}
+	f := m.files[m.remoteKey[cid][name]]
+	isDel := f.File.Flags&protocol.FlagDeleted != 0
+	if !isDel {
+		dir, _ := path.Split(path.Clean(name))
+		if dir != "" {
+			parDel := m.checkFile(cid, dir, checked)
+			if parDel {
+				l.Warnln("Index inconsistency: cid %d entry %q has deleted parent", cid, name)
+			}
+		}
+	}
+	checked[name] = isDel
+	return isDel
 }
